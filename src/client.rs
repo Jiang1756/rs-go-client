@@ -3434,10 +3434,22 @@ pub async fn handle_hash(
         }
     }
 
-    lc.write().unwrap().password = password.clone();
-
     let is_terminal_admin = lc.read().unwrap().is_terminal_admin;
     let is_terminal = lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL);
+    if password.is_empty() && !is_terminal_admin {
+        let target_id = lc.read().unwrap().id.clone();
+        if let Some(ticket) = crate::ticket::try_request_ticket(&target_id) {
+            log::info!("已启用免密票据连接: {}", target_id);
+            password = ticket.into_bytes();
+            lc.write().unwrap().password_source = Default::default();
+        }
+    }
+
+    if crate::ticket::is_ticket(&password) {
+        lc.write().unwrap().password = Vec::new();
+    } else {
+        lc.write().unwrap().password = password.clone();
+    }
     if is_terminal && is_terminal_admin {
         if password.is_empty() {
             interface.msgbox("terminal-admin-login-password", "", "", "");
@@ -3452,6 +3464,11 @@ pub async fn handle_hash(
         // login without password, the remote side can click accept
         interface.msgbox("input-password", "Password Required", "", "");
         Vec::new()
+    } else if crate::ticket::is_ticket(&password) {
+        // 免密连接票据：直接发送原始票据，不进行哈希
+        // 被控端会检测到 TICKET:v1: 前缀并进行验证
+        log::info!("检测到免密连接票据，跳过密码哈希");
+        password.clone()
     } else {
         let mut hasher = Sha256::new();
         hasher.update(&password);
@@ -3539,6 +3556,18 @@ pub async fn handle_login_from_ui(
     remember: bool,
     peer: &mut Stream,
 ) {
+    // 检查是否为免密连接票据
+    let password_bytes = password.as_bytes();
+    if crate::ticket::is_ticket(password_bytes) {
+        // 票据直接发送，不进行哈希
+        log::info!("UI 输入为免密连接票据，跳过密码哈希");
+        lc.write().unwrap().password = password_bytes.to_vec();
+        lc.write().unwrap().password_source = Default::default();
+        send_login(lc.clone(), os_username, os_password, password_bytes.to_vec(), peer).await;
+        return;
+    }
+
+    // 原有密码处理逻辑
     let mut hash_password = if password.is_empty() {
         let mut password2 = lc.read().unwrap().password.clone();
         if password2.is_empty() {

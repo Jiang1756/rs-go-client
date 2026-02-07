@@ -1918,6 +1918,42 @@ impl Connection {
     }
 
     fn validate_password(&mut self) -> bool {
+        // 优先检查是否为免密连接票据
+        // 票据格式: TICKET:v1:<base64url(payload)>.<base64url(signature)>
+        if crate::ticket::is_ticket(&self.lr.password) {
+            log::debug!(
+                "检测到免密连接票据: len={}",
+                self.lr.password.len()
+            );
+            let ticket_public_key = crate::ticket::get_ticket_public_key();
+            log::debug!("票据公钥长度: {}", ticket_public_key.len());
+            if !ticket_public_key.is_empty() {
+                let my_device_id = Config::get_id();
+                if let Some(payload) = crate::ticket::try_verify_ticket(
+                    &self.lr.password,
+                    &my_device_id,
+                    &ticket_public_key,
+                ) {
+                    log::info!(
+                        "免密连接票据验证成功: src_id={}, dst_id={}",
+                        payload.src_id,
+                        payload.dst_id
+                    );
+                    return true;
+                } else {
+                    log::debug!("免密连接票据验证未通过: dst_id={}", my_device_id);
+                    log::warn!("免密连接票据验证失败");
+                    // 票据验证失败，不继续尝试普通密码验证
+                    return false;
+                }
+            } else {
+                log::debug!("票据公钥为空，无法验证免密连接票据");
+                log::warn!("收到免密连接票据但未配置 ticket-public-key，拒绝连接");
+                return false;
+            }
+        }
+
+        // 原有密码验证逻辑（非票据情况）
         if password::temporary_enabled() {
             let password = password::temporary_password();
             if self.validate_one_password(password.clone()) {
