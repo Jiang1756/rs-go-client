@@ -1,15 +1,18 @@
-name: Flutter Nightly Build
+name: Flutter Build (Manual)
+run-name: "RustDesk Build #${{ github.run_number }} | ${{ github.event.inputs.upload-tag || 'dev' }} | @${{ github.actor }}"
 
 on:
-  schedule:
-    # schedule build every night
-    - cron: "0 0 * * *"
   workflow_dispatch:
+    inputs:
+      upload-tag:
+        description: "Release Tag (格式建议: MMDD-HHMMSS)"
+        required: false
+        default: ""
 
 jobs:
-  run-flutter-nightly-build:
+  run-flutter-manual-build:
     uses: ./.github/workflows/flutter-build.yml
     secrets: inherit
     with:
       upload-artifact: true
-      upload-tag: "nightly"
+      upload-tag: "${{ github.event.inputs.upload-tag || 'dev' }}"

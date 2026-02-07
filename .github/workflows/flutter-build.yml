@@ -29,7 +29,7 @@ env:
   ANDROID_FLUTTER_VERSION: "3.24.5"
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
-  TAG_NAME: "${{ inputs.upload-tag }}"
+  TAG_NAME: "${{ inputs.upload-tag }}-${{ github.run_number }}"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   # vcpkg version: 2025.08.27
   # If we change the `VCPKG COMMIT_ID`, please remember:
@@ -39,17 +39,23 @@ env:
   # 2. Update the `VCPKG_COMMIT_ID` in `ci.yml` and `playground.yml`.
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   ARMV7_VCPKG_COMMIT_ID: "6f29f12e82a8293156836ad81cc9bf5af41fe836" # 2025.01.13, got "/opt/artifacts/vcpkg/vcpkg: No such file or directory" with latest version
-  VERSION: "1.4.5"
+  VERSION: "1.4.4"
   NDK_VERSION: "r27c"
   #signing keys env variable checks
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
   UPLOAD_ARTIFACT: "${{ inputs.upload-artifact }}"
-  SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
+  SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"   # 移除 -2 后缀，secret 未设置时自动为空
+  # RustDesk 连接信息 (从 Secrets 获取)
+  RENDEZVOUS_SERVER: "${{ secrets.RUSTDESK_ID_SERVER }}"
+  RS_RELAY: "${{ secrets.RUSTDESK_RELAY_SERVER }}"
+  API_SERVER: "${{ secrets.RUSTDESK_API_SERVER }}"
+  RS_PUB_KEY: "${{ secrets.RUSTDESK_PUB_KEY }}"
 
 jobs:
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
+    secrets: inherit
 
   build-RustDeskTempTopMostWindow:
     uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
@@ -164,6 +170,11 @@ jobs:
         shell: bash
 
       - name: Build rustdesk
+        env:
+          RENDEZVOUS_SERVER: ${{ env.RENDEZVOUS_SERVER }}
+          RS_RELAY: ${{ env.RS_RELAY }}
+          API_SERVER: ${{ env.API_SERVER }}
+          RS_PUB_KEY: ${{ env.RS_PUB_KEY }}
         run: |
           # Windows: build RustDesk
           python3 .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
@@ -234,7 +245,7 @@ jobs:
           path: rustdesk
 
       - name: Sign rustdesk files
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
           pip3 install requests argparse
@@ -266,7 +277,7 @@ jobs:
           sha256sum ../../SignOutput/rustdesk-*.msi
 
       - name: Sign rustdesk self-extracted file
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput
@@ -281,9 +292,9 @@ jobs:
             ./SignOutput/rustdesk-*.msi
             ./SignOutput/rustdesk-*.exe
 
-  # The fallback for the flutter version, we use Sciter for 32bit Windows.
+  # 只构建 Windows x86_64，跳过 Sciter 版本
   build-for-windows-sciter:
-    name: ${{ matrix.job.target }} (${{ matrix.job.os }})
+    if: false  # 禁用：只需要 Windows x86_64
     runs-on: ${{ matrix.job.os }}
     # Temporarily disable this action due to additional test is needed.
     # if: false
@@ -400,7 +411,7 @@ jobs:
           path: Release
 
       - name: Sign rustdesk files
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
           pip3 install requests argparse
@@ -418,7 +429,7 @@ jobs:
           mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
 
       - name: Sign rustdesk self-extracted file
-        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
+        if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != ''
         shell: bash
         run: |
           BASE_URL=${{ env.SIGN_BASE_URL }} SECRET_KEY=${{ secrets.SIGN_SECRET_KEY }} python3 res/job.py sign_files ./SignOutput/
@@ -433,7 +444,8 @@ jobs:
             ./SignOutput/rustdesk-*.exe
 
   build-rustdesk-ios:
-    if: ${{ inputs.upload-artifact }}
+    if: false  # 禁用：只需要 Windows x86_64
+    # if: ${{ inputs.upload-artifact }}
     name: build rustdesk ios ipa
     runs-on: ${{ matrix.job.os }}
     needs: [generate-bridge]
@@ -553,6 +565,7 @@ jobs:
 
 
   build-for-macOS:
+    # macOS x86_64 构建 (无签名版本)
     name: ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     needs: [generate-bridge]
@@ -562,7 +575,7 @@ jobs:
         job:
           - {
               target: x86_64-apple-darwin,
-              os: macos-15-intel, #macos-latest or macos-14 use M1 now, https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#:~:text=14%20GB-,macos%2Dlatest%20or%20macos%2D14,-The%20macos%2Dlatestlabel
+              os: macos-15-intel,
               extra-build-args: "",
               arch: x86_64,
               vcpkg-triplet: x64-osx,
@@ -570,7 +583,6 @@ jobs:
           - {
               target: aarch64-apple-darwin,
               os: macos-14,
-              # extra-build-args: "--disable-flutter-texture-render", # disable this for mac, because we see a lot of users reporting flickering both on arm and x64, and we can not confirm if texture rendering has better performance if htere is no vram, https://github.com/rustdesk/rustdesk/issues/6296
               extra-build-args: "--screencapturekit",
               arch: aarch64,
               vcpkg-triplet: arm64-osx,
@@ -724,10 +736,26 @@ jobs:
       - name: create unsigned dmg
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
+          # 处理 App 签名：ARM 需要 ad-hoc 签名，x86_64 移除签名
+          echo "Processing code signatures for ${{ matrix.job.arch }} distribution..."
+          if [ "${{ matrix.job.arch }}" = "aarch64" ]; then
+            # ARM Mac 强制要求所有可执行文件必须有签名，使用 ad-hoc 签名
+            echo "ARM architecture detected: applying ad-hoc signature..."
+            codesign --force --deep --sign - ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          else
+            # x86_64 可以运行无签名的应用
+            echo "x86_64 architecture detected: removing signatures..."
+            codesign --remove-signature --deep ./flutter/build/macos/Build/Products/Release/RustDesk.app 2>/dev/null || true
+            find ./flutter/build/macos/Build/Products/Release/RustDesk.app -type f \( -name "*.dylib" -o -name "rustdesk" -o -name "service" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
+          fi
+          # 移除扩展属性（避免 Gatekeeper 隔离问题）
+          xattr -cr ./flutter/build/macos/Build/Products/Release/RustDesk.app 2>/dev/null || true
+          # 创建 DMG
           CREATE_DMG="$(command -v create-dmg)"
           CREATE_DMG="$(readlink -f "$CREATE_DMG")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
           create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          echo "Note: Users may need to right-click -> Open or run 'xattr -cr /Applications/RustDesk.app' to bypass Gatekeeper"
 
       - name: Upload unsigned macOS app
         if: env.UPLOAD_ARTIFACT == 'true'
@@ -771,40 +799,29 @@ jobs:
             rustdesk*-${{ matrix.job.arch }}.dmg
 
   publish_unsigned:
+    if: false  # 禁用：各平台产物已单独发布
     needs:
       - build-for-macOS
       - build-for-windows-flutter
-      - build-for-windows-sciter
     runs-on: ubuntu-latest
-    if: ${{ inputs.upload-artifact }}
+    # if: ${{ inputs.upload-artifact }}  # 原条件已禁用
     steps:
-      - name: Download artifacts
+      - name: Download macOS x86_64 artifacts
         uses: actions/download-artifact@master
+        continue-on-error: true
         with:
           name: rustdesk-unsigned-macos-x86_64
           path: ./
 
-      - name: Download Artifacts
-        uses: actions/download-artifact@master
-        with:
-          name: rustdesk-unsigned-macos-aarch64
-          path: ./
-
-      - name: Download Artifacts
+      - name: Download Windows x86_64 Artifacts
         uses: actions/download-artifact@master
         with:
           name: rustdesk-unsigned-windows-x86_64
           path: ./windows-x86_64/
 
-      - name: Download Artifacts
-        uses: actions/download-artifact@master
-        with:
-          name: rustdesk-unsigned-windows-x86
-          path: ./windows-x86/
-
       - name: Combine unsigned app
         run: |
-          tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64 windows-x86
+          tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64 2>/dev/null || tar czf rustdesk-${{ env.VERSION }}-unsigned.tar.gz windows-x86_64
 
       - name: Publish unsigned app
         uses: softprops/action-gh-release@v1
@@ -814,6 +831,7 @@ jobs:
           files: rustdesk-${{ env.VERSION }}-unsigned.tar.gz
 
   build-rustdesk-android:
+    if: false  # 禁用：只需要 Windows x86_64
     needs: [generate-bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -1106,9 +1124,10 @@ jobs:
             signed-apk/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
 
   build-rustdesk-android-universal:
+    if: false  # 禁用：只需要 Windows x86_64
     needs: [build-rustdesk-android]
     name: build rustdesk android universal apk
-    if: ${{ inputs.upload-artifact }}
+    # if: ${{ inputs.upload-artifact }}
     runs-on: ubuntu-24.04
     env:
       reltype: release
@@ -1290,6 +1309,7 @@ jobs:
             signed-apk/rustdesk-${{ env.VERSION }}-universal${{ env.suffix }}.apk
 
   build-rustdesk-linux:
+    if: false  # 禁用：只需要 Windows x86_64
     needs: [generate-bridge]
     name: build rustdesk linux ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.on }}
@@ -1306,14 +1326,15 @@ jobs:
               deb_arch: amd64,
               vcpkg-triplet: x64-linux,
             }
-          - {
-              arch: aarch64,
-              target: aarch64-unknown-linux-gnu,
-              distro: ubuntu18.04,
-              on: ubuntu-22.04-arm,
-              deb_arch: arm64,
-              vcpkg-triplet: arm64-linux,
-            }
+          # ARM 版本暂时禁用（私有仓库不支持 ARM runner）
+          # - {
+          #     arch: aarch64,
+          #     target: aarch64-unknown-linux-gnu,
+          #     distro: ubuntu18.04,
+          #     on: ubuntu-22.04-arm,
+          #     deb_arch: arm64,
+          #     vcpkg-triplet: arm64-linux,
+          #   }
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -1627,7 +1648,8 @@ jobs:
             res/rustdesk-${{ env.VERSION }}*.zst
 
   build-rustdesk-linux-sciter:
-    if: ${{ inputs.upload-artifact }}
+    if: false  # 禁用：只需要 Windows x86_64
+    # if: ${{ inputs.upload-artifact }}
     runs-on: ${{ matrix.job.on }}
     name: build-rustdesk-linux-sciter ${{ matrix.job.target }}
     strategy:
@@ -1645,16 +1667,17 @@ jobs:
               vcpkg-triplet: x64-linux,
               extra_features: ",hwcodec,unix-file-copy-paste",
             }
-          - {
-              arch: armv7,
-              target: armv7-unknown-linux-gnueabihf,
-              on: ubuntu-22.04-arm,
-              distro: ubuntu18.04-rustdesk,
-              deb_arch: armhf,
-              sciter_arch: arm32,
-              vcpkg-triplet: arm-linux,
-              extra_features: ",unix-file-copy-paste",
-            }
+          # ARM 版本暂时禁用（私有仓库不支持 ARM runner）
+          # - {
+          #     arch: armv7,
+          #     target: armv7-unknown-linux-gnueabihf,
+          #     on: ubuntu-22.04-arm,
+          #     distro: ubuntu18.04-rustdesk,
+          #     deb_arch: armhf,
+          #     sciter_arch: arm32,
+          #     vcpkg-triplet: arm-linux,
+          #     extra_features: ",unix-file-copy-paste",
+          #   }
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
@@ -1854,10 +1877,11 @@ jobs:
           path: rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.deb
 
   build-appimage:
+    if: false  # 禁用：只需要 Windows x86_64
     name: Build appimage ${{ matrix.job.target }}
     needs: [build-rustdesk-linux]
     runs-on: ubuntu-22.04
-    if: ${{ inputs.upload-artifact }}
+    # if: ${{ inputs.upload-artifact }}
     strategy:
       fail-fast: false
       matrix:
@@ -1904,12 +1928,13 @@ jobs:
             ./appimage/rustdesk-${{ env.VERSION }}-*.AppImage
 
   build-flatpak:
+    if: false  # 禁用：只需要 Windows x86_64
     name: Build flatpak ${{ matrix.job.target }}${{ matrix.job.suffix }}
     needs:
       - build-rustdesk-linux
       - build-rustdesk-linux-sciter
     runs-on: ${{ matrix.job.on }}
-    if: ${{ inputs.upload-artifact }}
+    # if: ${{ inputs.upload-artifact }}
     strategy:
       fail-fast: false
       matrix:

@@ -77,3 +77,6 @@ pub mod privacy_mode;
 pub mod virtual_display_manager;
 
 mod kcp_stream;
+
+// 免密连接票据验证模块
+pub mod ticket;
